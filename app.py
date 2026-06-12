@@ -1,12 +1,15 @@
 import html
 import io
 import re
+import importlib
 
 import joblib
 import pandas as pd
 import streamlit as st
 from rapidfuzz import fuzz, process
 
+import analyzer
+importlib.reload(analyzer)
 from analyzer import MODEL_PATH, analyze_with_ml
 from column_mapper import (
     detect_pengadaan_columns,
