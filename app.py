@@ -5,7 +5,7 @@ import io
 from rapidfuzz import process, fuzz
 from google import genai
 
-st.set_page_config(page_title="PriceScan AI", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Corrupt Detector AI", page_icon="🔍", layout="wide")
 
 # Custom CSS styling
 st.markdown("""
