@@ -33,7 +33,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-title">🔍 PriceScan AI</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-title">🔍 Corrupt Detector AI</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-title">Intelligent Procurement Anomaly Detector — Deteksi potensi korupsi dari data pengadaan barang</p>', unsafe_allow_html=True)
 st.divider()
 
