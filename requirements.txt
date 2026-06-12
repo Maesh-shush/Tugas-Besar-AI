@@ -1,5 +1,6 @@
 streamlit
 pandas
 rapidfuzz
-google-genai
 openpyxl
+scikit-learn
+joblib

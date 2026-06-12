@@ -1,9 +1,11 @@
-import streamlit as st
-import pandas as pd
-import json
 import io
-from rapidfuzz import process, fuzz
-from google import genai
+
+import joblib
+import pandas as pd
+import streamlit as st
+from rapidfuzz import fuzz, process
+
+from analyzer import MODEL_PATH, analyze_with_ml
 
 st.set_page_config(page_title="Corrupt Detector AI", page_icon="🔍", layout="wide")
 
@@ -34,7 +36,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<p class="main-title">🔍 Corrupt Detector AI</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Intelligent Procurement Anomaly Detector — Deteksi potensi korupsi dari data pengadaan barang</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Intelligent Procurement Anomaly Detector — Deteksi potensi korupsi menggunakan Machine Learning lokal</p>', unsafe_allow_html=True)
 st.divider()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -52,36 +54,15 @@ with st.sidebar:
 - `Sumber`, `Tanggal Update` *(opsional)*
     """)
     st.divider()
-
-    if "gemini_key" not in st.session_state:
-        st.session_state.gemini_key = ""
-
-    gemini_key_input = st.text_input(
-        "🔑 Gemini API Key",
-        value=st.session_state.gemini_key,
-        type="password",
-        help="Masukkan API key dari aistudio.google.com"
-    )
-    if gemini_key_input:
-        st.session_state.gemini_key = gemini_key_input
-    gemini_key = st.session_state.gemini_key
-
-    if gemini_key:
-        st.success("✅ API Key tersimpan")
+    st.markdown("**🤖 Model ML Lokal**")
+    if MODEL_PATH.exists():
+        st.success("✅ Model siap (`model_anomali.pkl`)")
     else:
-        st.warning("⚠️ Belum ada API Key")
+        st.error("❌ Model belum ada. Jalankan `python train_model.py` terlebih dahulu.")
 
     st.divider()
     threshold = st.slider("Ambang batas selisih (%)", 5, 50, 20, 5)
     fuzzy_threshold = st.slider("Sensitivitas pencocokan nama (%)", 50, 100, 75, 5)
-
-    st.divider()
-    model_option = st.selectbox(
-        "🤖 Pilih Model Gemini",
-        options=["gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-flash", "gemini-1.5-pro"],
-        index=0,
-        help="Pilih model AI yang ingin digunakan. Jika satu model sedang sibuk (503), Anda bisa beralih ke model lain."
-    )
 
     st.divider()
     threshold_pj = st.slider(
@@ -120,34 +101,14 @@ def match_harga_pasar(nama_barang, df_ref, col_nama_ref, col_harga_ref, threshol
         return float(harga), matched_name, result[1], sumber
     return None, None, 0, None
 
-# Caching the Gemini API call based on inputs to save tokens & request count
-@st.cache_data(show_spinner=False)
-def analyze_with_gemini(api_key, items_json_str, threshold_val, model_name="gemini-2.5-flash"):
-    client = genai.Client(api_key=api_key)
-    format_item = '{"nama_barang": "...", "status": "valid" atau "anomali", "selisih_persen": 0.0, "alasan": "...", "risiko": "rendah"/"sedang"/"tinggi" atau null}'
-
-    prompt = (
-        "Kamu adalah auditor pengadaan barang yang ahli mendeteksi anomali harga dan potensi korupsi.\n\n"
-        "Analisis setiap item berikut. Threshold selisih mencurigakan: " + str(threshold_val) + "%\n\n"
-        "Kriteria anomali:\n"
-        "- Selisih harga beli vs pasar melebihi threshold\n"
-        "- Harga beli jauh di atas harga pasar tanpa alasan logis\n"
-        "- Pola mencurigakan pada penanggung jawab yang sama\n\n"
-        "Data:\n" + items_json_str + "\n\n"
-        "Kembalikan HANYA JSON array tanpa teks lain, tanpa markdown, tanpa backtick.\n"
-        "Format tiap item:\n" + format_item
-    )
-
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt
-    )
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return raw.strip()
+@st.cache_resource(show_spinner="Memuat model ML...")
+def load_model_bundle():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Model tidak ditemukan di {MODEL_PATH}. "
+            "Jalankan: python train_model.py"
+        )
+    return joblib.load(MODEL_PATH)
 
 
 # ── Upload Section ────────────────────────────────────────────────────────────
@@ -189,7 +150,7 @@ if file_pengadaan and file_referensi:
     # Create a unique key representing current uploaded files and parameters
     file_pengadaan_id = f"{file_pengadaan.name}_{file_pengadaan.size}"
     file_referensi_id = f"{file_referensi.name}_{file_referensi.size}"
-    current_config_key = f"{file_pengadaan_id}|{file_referensi_id}|{threshold}|{fuzzy_threshold}|{model_option}"
+    current_config_key = f"{file_pengadaan_id}|{file_referensi_id}|{threshold}|{fuzzy_threshold}"
     
     if "last_config_key" not in st.session_state:
         st.session_state.last_config_key = current_config_key
@@ -245,22 +206,18 @@ if file_pengadaan and file_referensi:
     st.divider()
 
     # Trigger button to start analysis
-    start_analysis = st.button("🚀 Mulai Analisis dengan AI", type="primary", use_container_width=True)
+    start_analysis = st.button("🚀 Mulai Analisis dengan ML", type="primary", use_container_width=True)
     
     items_to_analyze = [m for m in matches if m["harga_pasar"] is not None]
     
     if start_analysis:
-        if not gemini_key:
-            st.error("❌ Masukkan Gemini API Key di sidebar kiri terlebih dahulu!")
-            st.stop()
-
         if not items_to_analyze:
             st.error("Tidak ada item yang bisa dianalisis (seluruh barang tidak memiliki referensi pasar).")
             st.stop()
 
-        with st.spinner("🤖 AI sedang menganalisis..."):
+        with st.spinner("🤖 Model ML sedang menganalisis..."):
             try:
-                # Structure the data as serialized JSON list for cached function
+                model_bundle = load_model_bundle()
                 data_list = []
                 for m in items_to_analyze:
                     data_list.append({
@@ -272,32 +229,14 @@ if file_pengadaan and file_referensi:
                         "satuan": m["satuan"],
                         "penanggung_jawab": m["pj"],
                     })
-                items_json_str = json.dumps(data_list, ensure_ascii=False)
-                
-                # Fetch results (this uses cache if identical data & threshold are run)
-                raw_result = analyze_with_gemini(gemini_key, items_json_str, threshold, model_option)
-                results = json.loads(raw_result)
-                
-                # Save into session state so it survives UI interaction reruns
+
+                results = analyze_with_ml(data_list, model_bundle, threshold)
                 st.session_state.analysis_results = results
                 st.success("✅ Analisis selesai!")
+            except FileNotFoundError as e:
+                st.error(f"❌ {e}")
             except Exception as e:
-                err_msg = str(e)
-                # Specific user friendly warning for API rate limits and model unavailable
-                if "429" in err_msg or "ResourceExhausted" in err_msg or "quota" in err_msg.lower():
-                    st.error(
-                        "❌ **Batas Kuota API Terlampaui (API Rate Limit Exceeded - 429)**\n\n"
-                        "Gemini API tingkat gratis (Free Tier) membatasi jumlah request per menit. "
-                        "Silakan tunggu sekitar **1 menit** sebelum mencoba lagi, atau gunakan API Key berbayar (Pay-as-you-go)."
-                    )
-                elif "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower():
-                    st.error(
-                        "❌ **Layanan Google Gemini Sedang Sibuk (Server Overload - 503)**\n\n"
-                        "Model yang dipilih saat ini sedang mengalami lalu lintas data yang sangat padat di server Google. "
-                        "Silakan tunggu beberapa detik dan klik kembali tombol **Mulai Analisis dengan AI**, atau coba ganti model lain di sidebar kiri."
-                    )
-                else:
-                    st.error("Error AI: " + err_msg)
+                st.error("Error ML: " + str(e))
                 st.stop()
 
     # Display results if they exist in st.session_state
@@ -306,7 +245,7 @@ if file_pengadaan and file_referensi:
         
         # Guard against mismatch size if config changes but state wasn't cleared
         if len(results) != len(items_to_analyze):
-            st.warning("⚠️ Terjadi ketidaksesuaian data cache. Klik tombol 'Mulai Analisis dengan AI' untuk memperbarui.")
+            st.warning("⚠️ Terjadi ketidaksesuaian data cache. Klik tombol 'Mulai Analisis dengan ML' untuk memperbarui.")
             st.stop()
 
         # Calculate PJ anomaly scores
@@ -472,7 +411,7 @@ if file_pengadaan and file_referensi:
                 "Selisih (%)":           r.get("selisih_persen", 0),
                 "Status":                r.get("status","").upper(),
                 "Risiko":                r.get("risiko", "-") or "-",
-                "Keterangan AI":         r.get("alasan",""),
+                "Keterangan ML":         r.get("alasan",""),
                 "Penanggung Jawab":      pj_name,
                 "Skor Anomali PJ":       pj_score,
                 "Status Flag PJ":        pj_flag,
@@ -486,7 +425,7 @@ if file_pengadaan and file_referensi:
                 "Selisih (%)":           "-",
                 "Status":                "TIDAK DITEMUKAN",
                 "Risiko":                "-",
-                "Keterangan AI":         "Tidak ada data referensi",
+                "Keterangan ML":         "Tidak ada data referensi",
                 "Penanggung Jawab":      m["pj"],
                 "Skor Anomali PJ":       "-",
                 "Status Flag PJ":        "-",
