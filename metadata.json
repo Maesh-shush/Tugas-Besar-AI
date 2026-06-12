@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Deteksi Korupsi Transaksi",
+  "description": "Aplikasi berbasis AI untuk menganalisis data transaksi keuangan, mendeteksi penggelembungan dana (markup), pola transaksi tidak lazim, serta menyusun laporan berkala audit internal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
