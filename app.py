@@ -6,6 +6,11 @@ import streamlit as st
 from rapidfuzz import fuzz, process
 
 from analyzer import MODEL_PATH, analyze_with_ml
+from column_mapper import (
+    detect_pengadaan_columns,
+    detect_referensi_columns,
+    parse_number,
+)
 
 st.set_page_config(page_title="Corrupt Detector AI", page_icon="🔍", layout="wide")
 
@@ -72,14 +77,7 @@ with st.sidebar:
     )
 
 
-# ── Helper functions & Cached API ──────────────────────────────────────────────
-def find_col(df, keywords):
-    for col in df.columns:
-        for kw in keywords:
-            if kw.lower() in col.lower():
-                return col
-    return None
-
+# ── Helper functions ───────────────────────────────────────────────────────────
 def format_rupiah(val):
     try:
         return "Rp {:,}".format(int(val)).replace(",", ".")
@@ -89,16 +87,19 @@ def format_rupiah(val):
 def load_file(file):
     return pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
 
-def match_harga_pasar(nama_barang, df_ref, col_nama_ref, col_harga_ref, threshold_score):
+def match_harga_pasar(nama_barang, df_ref, col_nama_ref, col_harga_ref, col_sumber_ref, threshold_score):
     choices = df_ref[col_nama_ref].astype(str).tolist()
     result = process.extractOne(nama_barang, choices, scorer=fuzz.token_sort_ratio)
     if result and result[1] >= threshold_score:
         matched_name = result[0]
         idx = df_ref[df_ref[col_nama_ref].astype(str) == matched_name].index[0]
-        harga = df_ref.loc[idx, col_harga_ref]
-        sumber_col = find_col(df_ref, ["sumber", "source"])
-        sumber = df_ref.loc[idx, sumber_col] if sumber_col else "-"
-        return float(harga), matched_name, result[1], sumber
+        harga = parse_number(df_ref.loc[idx, col_harga_ref])
+        sumber = "-"
+        if col_sumber_ref:
+            sumber = str(df_ref.loc[idx, col_sumber_ref])
+        if harga is None:
+            return None, None, 0, None
+        return harga, matched_name, result[1], sumber
     return None, None, 0, None
 
 @st.cache_resource(show_spinner="Memuat model ML...")
@@ -128,23 +129,48 @@ if file_pengadaan and file_referensi:
         st.error("Gagal membaca file: " + str(e))
         st.stop()
 
-    col_nama      = find_col(df_pengadaan, ["nama barang","nama","barang","item","produk"])
-    col_beli      = find_col(df_pengadaan, ["harga beli","beli","purchase","buy price"])
-    col_jml       = find_col(df_pengadaan, ["jumlah","qty","quantity"])
-    col_sat       = find_col(df_pengadaan, ["satuan","unit"])
-    col_pj        = find_col(df_pengadaan, ["penanggung jawab","pj","responsible"])
-    col_tgl       = find_col(df_pengadaan, ["tanggal","date","tgl"])
-    col_nama_ref  = find_col(df_referensi, ["nama barang","nama","barang","item","produk"])
-    col_harga_ref = find_col(df_referensi, ["harga pasar","pasar","market","harga","price","referensi"])
+    cols_pengadaan = detect_pengadaan_columns(df_pengadaan)
+    cols_referensi = detect_referensi_columns(df_referensi)
+
+    col_nama      = cols_pengadaan.get("nama_barang")
+    col_beli      = cols_pengadaan.get("harga_beli")
+    col_jml       = cols_pengadaan.get("jumlah")
+    col_sat       = cols_pengadaan.get("satuan")
+    col_pj        = cols_pengadaan.get("penanggung_jawab")
+    col_tgl       = cols_pengadaan.get("tanggal")
+    col_nama_ref  = cols_referensi.get("nama_barang")
+    col_harga_ref = cols_referensi.get("harga_pasar")
+    col_sumber_ref = cols_referensi.get("sumber")
 
     if not col_nama or not col_beli:
         st.error("❌ Kolom wajib tidak ditemukan di file pengadaan: Nama Barang & Harga Beli")
+        with st.expander("Kolom yang terdeteksi di file pengadaan"):
+            st.write(list(df_pengadaan.columns))
         st.stop()
     if not col_nama_ref or not col_harga_ref:
         st.error("❌ Kolom wajib tidak ditemukan di file referensi: Nama Barang & Harga Pasar")
+        with st.expander("Kolom yang terdeteksi di file referensi"):
+            st.write(list(df_referensi.columns))
         st.stop()
 
     st.success("✅ File pengadaan: **" + str(len(df_pengadaan)) + " item** | File referensi: **" + str(len(df_referensi)) + " item**")
+
+    with st.expander("🔎 Kolom yang terdeteksi otomatis", expanded=False):
+        st.markdown("**File Pengadaan**")
+        st.dataframe(pd.DataFrame([
+            {"Peran": "Nama Barang", "Kolom Terdeteksi": col_nama},
+            {"Peran": "Harga Beli", "Kolom Terdeteksi": col_beli},
+            {"Peran": "Jumlah", "Kolom Terdeteksi": col_jml or "-"},
+            {"Peran": "Satuan", "Kolom Terdeteksi": col_sat or "-"},
+            {"Peran": "Penanggung Jawab", "Kolom Terdeteksi": col_pj or "-"},
+            {"Peran": "Tanggal", "Kolom Terdeteksi": col_tgl or "-"},
+        ]), use_container_width=True, hide_index=True)
+        st.markdown("**File Referensi**")
+        st.dataframe(pd.DataFrame([
+            {"Peran": "Nama Barang", "Kolom Terdeteksi": col_nama_ref},
+            {"Peran": "Harga Pasar", "Kolom Terdeteksi": col_harga_ref},
+            {"Peran": "Sumber", "Kolom Terdeteksi": col_sumber_ref or "-"},
+        ]), use_container_width=True, hide_index=True)
 
     # ── State Resetting if inputs change ──────────────────────────────────────────
     # Create a unique key representing current uploaded files and parameters
@@ -173,10 +199,11 @@ if file_pengadaan and file_referensi:
     for _, row in df_pengadaan.iterrows():
         nama = str(row[col_nama])
         harga_pasar, nama_match, score, sumber = match_harga_pasar(
-            nama, df_referensi, col_nama_ref, col_harga_ref, fuzzy_threshold)
+            nama, df_referensi, col_nama_ref, col_harga_ref, col_sumber_ref, fuzzy_threshold)
+        harga_beli = parse_number(row[col_beli]) or 0.0
         matches.append({
             "nama_beli":  nama,
-            "harga_beli": float(row[col_beli]) if pd.notna(row[col_beli]) else 0,
+            "harga_beli": harga_beli,
             "harga_pasar": harga_pasar,
             "nama_match": nama_match,
             "score":      score,
